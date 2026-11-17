@@ -1,0 +1,103 @@
+apply plugin: 'com.android.application'
+
+// Версия приложения: android/version.properties
+def versionProps = new Properties()
+file("../version.properties").withInputStream { versionProps.load(it) }
+
+// Подпись релиза: android/keystore.properties (в git не попадает, см. docs/ANDROID.md)
+def keystoreProps = new Properties()
+def keystoreFile = rootProject.file("keystore.properties")
+if (keystoreFile.exists()) {
+    keystoreFile.withInputStream { keystoreProps.load(it) }
+}
+
+android {
+    namespace = "ru.gskrodnik.app"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "ru.gskrodnik.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode versionProps['VERSION_CODE'].toInteger()
+        versionName versionProps['VERSION_NAME']
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        release {
+            if (keystoreFile.exists()) {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // Без keystore.properties релиз соберётся неподписанным, и установить его нельзя
+            if (keystoreFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+}
+
+// Имя файла: <проект>-<версия>.apk (release), <проект>-<версия>-debug.apk; без ключа подписи — <проект>-<версия>-unsigned.apk
+android.applicationVariants.all { variant ->
+    variant.outputs.all {
+        def suffix = variant.buildType.name == 'release' ? (keystoreFile.exists() ? '' : '-unsigned') : "-${variant.buildType.name}"
+        outputFileName = "gsk-rodnik-${variant.versionName}${suffix}.apk"
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
+
+// Защита от выпуска «отладочной» веб-части в релиз: если перед сборкой в Android Studio выполняли `cap sync` с CAP_DEV=1,
+// в assets останется HTTP-схема, mixed content и отладка WebView. Такой релиз собирать нельзя.
+tasks.register('verifyReleaseConfig') {
+    doLast {
+        def f = file('src/main/assets/capacitor.config.json')
+        if (!f.exists()) throw new GradleException('Нет capacitor.config.json: выполните npm run android:web в apps/pwa')
+        def t = f.text
+        if (t =~ /"androidScheme"\s*:\s*"http"/ || t =~ /"allowMixedContent"\s*:\s*true/ || t =~ /"webContentsDebuggingEnabled"\s*:\s*true/) {
+            throw new GradleException('Веб-часть собрана в режиме CAP_DEV=1 (HTTP/отладка). Для релиза: Remove-Item Env:CAP_DEV; npm.cmd run android:web')
+        }
+    }
+}
+afterEvaluate {
+    tasks.matching { it.name == 'preReleaseBuild' }.configureEach { dependsOn 'verifyReleaseConfig' }
+}

@@ -1,0 +1,20 @@
+[Unit]
+Description=ГСК «Родник» — резервная копия (база и файлы)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=gsk
+Group=gsk
+EnvironmentFile=/etc/gsk/api.env
+ExecStart=/opt/gsk/bin/backup.sh
+Nice=10
+IOSchedulingClass=idle
+SyslogIdentifier=gsk-backup
+UMask=0007
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/backups/gsk
+ReadOnlyPaths=/var/lib/gsk

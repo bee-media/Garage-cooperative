@@ -1,0 +1,138 @@
+# GitLab CI для ГСК «Родник»
+#
+# Ветки:
+#   develop  → сборка → АВТОМАТИЧЕСКИЙ деплой на ТЕСТОВЫЙ сервер
+#   main     → сборка → деплой на БОЕВОЙ сервер по кнопке (ручной запуск)
+#   остальные ветки и merge request → только проверка сборки
+#
+# Нужные переменные CI/CD (Settings → CI/CD → Variables). Заведите их ДВАЖДЫ с разной областью (Environment scope):
+# для `test` и для `production`. Подробности — docs/DEPLOY.md.
+#   SSH_PRIVATE_KEY   (тип File)  закрытый ключ пользователя gsk-deploy этого сервера
+#   SSH_KNOWN_HOSTS   (тип File)  результат `ssh-keyscan -p 22 <адрес сервера>` (закрепляет отпечаток сервера)
+#   DEPLOY_HOST                   адрес сервера
+#   DEPLOY_PORT       (необяз.)   порт SSH, по умолчанию 22
+#   DEPLOY_USER       (необяз.)   по умолчанию gsk-deploy
+# Для production включите у переменных «Protect variable» и защитите ветку main.
+
+stages: [verify, package, deploy]
+
+default:
+  image: node:22-bookworm
+
+variables:
+  npm_config_cache: "$CI_PROJECT_DIR/.npm"
+  npm_config_audit: "false"
+  npm_config_fund: "false"
+  GIT_DEPTH: "1"
+
+cache:
+  key:
+    files: [package-lock.json]
+  paths: [.npm/]
+
+# ───────────── Проверка: типы и сборка всех приложений ─────────────
+build:
+  stage: verify
+  script:
+    - npm ci --ignore-scripts
+    - npx --workspace @gsk/api prisma generate
+    - npm run build --workspace @gsk/api
+    - npm run build --workspace @gsk/admin
+    - npm run build --workspace @gsk/pwa
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - apps/api/dist/
+      - apps/admin/dist/
+      - apps/pwa/dist/
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+
+# ───────────── Упаковка релиза (только develop и main) ─────────────
+package:
+  stage: package
+  needs: [build]
+  script:
+    - RELEASE_ID="$(date -u +%Y%m%d%H%M%S)-${CI_COMMIT_SHORT_SHA}"
+    - echo "$RELEASE_ID" > release.id
+    - bash scripts/package-release.sh "$RELEASE_ID"
+  artifacts:
+    expire_in: 14 days
+    paths: [release.tar.gz, release.id]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# ───────────── Деплой ─────────────
+.ssh_setup:
+  image: alpine:3.20
+  before_script:
+    - command -v ssh >/dev/null || apk add --no-cache openssh-client  # при shell-раннере ssh уже стоит в системе
+    - chmod 600 "$SSH_PRIVATE_KEY"
+  variables:
+    DEPLOY_USER: gsk-deploy
+    DEPLOY_PORT: "22"
+
+.deploy_script: &deploy_script
+  - RELEASE_ID="$(cat release.id)"
+  - echo "Выкатываю $RELEASE_ID на $DEPLOY_HOST"
+  # Ключ на сервере привязан к команде deploy-receive.sh: аргумент — идентификатор релиза, архив идёт через stdin
+  - >
+    ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_KNOWN_HOSTS"
+    -i "$SSH_PRIVATE_KEY" -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "$RELEASE_ID" < release.tar.gz
+
+deploy_test:
+  extends: .ssh_setup
+  stage: deploy
+  needs: [package]
+  environment:
+    name: test
+  resource_group: deploy-test
+  script: *deploy_script
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+
+deploy_prod:
+  extends: .ssh_setup
+  stage: deploy
+  needs: [package]
+  environment:
+    name: production
+  resource_group: deploy-production
+  script: *deploy_script
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+  allow_failure: false
+
+# ───────────── Откат на предыдущий рабочий релиз (ручной запуск) ─────────────
+rollback_test:
+  extends: .ssh_setup
+  stage: deploy
+  needs: []
+  environment:
+    name: test
+  resource_group: deploy-test
+  script:
+    - >
+      ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_KNOWN_HOSTS"
+      -i "$SSH_PRIVATE_KEY" -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" rollback
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+      when: manual
+
+rollback_prod:
+  extends: .ssh_setup
+  stage: deploy
+  needs: []
+  environment:
+    name: production
+  resource_group: deploy-production
+  script:
+    - >
+      ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_KNOWN_HOSTS"
+      -i "$SSH_PRIVATE_KEY" -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" rollback
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual

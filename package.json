@@ -1,0 +1,8 @@
+{
+  "name": "gsk-rodnik",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Система управления ГСК «Родник»",
+  "workspaces": ["apps/*", "packages/*"],
+  "engines": { "node": ">=22" }
+}

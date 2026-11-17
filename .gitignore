@@ -1,0 +1,28 @@
+node_modules/
+dist/
+build/
+.env
+.env.*
+!.env.example
+storage/
+*.log
+.idea/
+coverage/
+
+# Сборка Android: адрес сервера
+apps/pwa/.env.android
+!.env.android.example
+
+# Артефакты упаковки релиза
+release.tar.gz
+release.id
+.release/
+
+# Локальные файлы окружения и черновики
+.claude/
+variant-*.html
+*.apk
+keystore.properties
+*.jks
+*.keystore
+google-services.json

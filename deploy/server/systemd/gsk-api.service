@@ -1,0 +1,50 @@
+[Unit]
+Description=ГСК «Родник» — API
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=gsk
+Group=gsk
+WorkingDirectory=/opt/gsk/current/apps/api
+EnvironmentFile=/etc/gsk/api.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node dist/main.js
+Restart=on-failure
+RestartSec=3
+# Журнал смотрим так: journalctl -u gsk-api -f
+SyslogIdentifier=gsk-api
+TimeoutStopSec=20
+
+# ── Ограничение возможностей процесса (на случай взлома приложения) ──
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+# Писать можно только в хранилище загруженных файлов
+ReadWritePaths=/var/lib/gsk
+LimitNOFILE=65535
+MemoryMax=1500M
+
+[Install]
+WantedBy=multi-user.target
